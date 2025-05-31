@@ -3,8 +3,26 @@ const cors = require("cors");
 const port = process.env.PORT || 5000;
 const app = express();
 require("dotenv").config();
-app.use(cors());
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
+app.use(cors({ origin: ["http://localhost:5173"], credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
+
+const verifyToken = (req, res, next) => {
+  const token = req?.cookies?.token;
+  if (!token) {
+    return res.status(401).send({ message: "unothorized access" });
+  }
+  //verify
+  jwt.verify(token, process.env.JWT_SECRET, (err, decode) => {
+    if (err) {
+      return res.status(401).send({ message: "unothorized access found" });
+    }
+    req.decode = decode;
+    next();
+  });
+};
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.mo9z4qj.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -25,6 +43,21 @@ async function run() {
       .db("careerCode")
       .collection("application");
 
+    //jwt token api
+    app.post("/jwt", async (req, res) => {
+      const { email } = req.body;
+      const user = { email };
+      const token = jwt.sign(user, process.env.JWT_SECRET, {
+        expiresIn: "1d",
+      });
+      //set cookies
+      res.cookie("token", token, {
+        httpOnly: true,
+        secure: false,
+      });
+      res.send({ success: true });
+    });
+
     app.get("/jobs", async (req, res) => {
       const email = req.query.email;
       const query = {};
@@ -43,8 +76,11 @@ async function run() {
     });
 
     //job application
-    app.get("/applications", async (req, res) => {
+    app.get("/applications", verifyToken, async (req, res) => {
       const email = req.query.email;
+      if (email != req.decode.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
       const query = { applicant: email };
       const result = await applicationCollection.find(query).toArray();
       res.send(result);
