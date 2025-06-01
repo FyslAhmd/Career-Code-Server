@@ -5,16 +5,31 @@ const app = express();
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
-app.use(cors({ origin: ["http://localhost:5173"], credentials: true }));
+app.use(
+  cors({
+    origin: "https://career-code-c94f7.web.app",
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(cookieParser());
 
+const admin = require("firebase-admin");
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf-8"
+);
+const serviceAccount = JSON.parse(decoded);
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+//verify using cookies
 const verifyToken = (req, res, next) => {
   const token = req?.cookies?.token;
   if (!token) {
     return res.status(401).send({ message: "unothorized access" });
   }
-  //verify
+
   jwt.verify(token, process.env.JWT_SECRET, (err, decode) => {
     if (err) {
       return res.status(401).send({ message: "unothorized access found" });
@@ -22,6 +37,29 @@ const verifyToken = (req, res, next) => {
     req.decode = decode;
     next();
   });
+};
+
+//  //verify using firebase token
+const verifyFirebaseToken = async (req, res, next) => {
+  const authHeader = req.headers?.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.decoded = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
+
+const verifyTokenEmail = (req, res, next) => {
+  if (req.query.email !== req.decoded.email) {
+    return res.status(403).send({ message: "forbidden access" });
+  }
+  next();
 };
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -37,7 +75,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     const jobsCollection = client.db("careerCode").collection("jobs");
     const applicationCollection = client
       .db("careerCode")
@@ -75,16 +113,26 @@ async function run() {
       res.send(result);
     });
 
-    //job application
-    app.get("/applications", verifyToken, async (req, res) => {
-      const email = req.query.email;
-      if (email != req.decode.email) {
-        return res.status(403).send({ message: "forbidden access" });
+    //job application using cookies
+    // app.get("/applications", verifyToken,verifyTokenEmail, async (req, res) => {
+    //   const email = req.query.email;
+    //   const query = { applicant: email };
+    //   const result = await applicationCollection.find(query).toArray();
+    //   res.send(result);
+    // });
+
+    //job application using firebase access Token
+    app.get(
+      "/applications",
+      verifyFirebaseToken,
+      verifyTokenEmail,
+      async (req, res) => {
+        const email = req.query.email;
+        const query = { applicant: email };
+        const result = await applicationCollection.find(query).toArray();
+        res.send(result);
       }
-      const query = { applicant: email };
-      const result = await applicationCollection.find(query).toArray();
-      res.send(result);
-    });
+    );
 
     app.post("/applications", async (req, res) => {
       const application = req.body;
@@ -98,8 +146,8 @@ async function run() {
       res.send(result);
     });
 
-    await client.db("admin").command({ ping: 1 });
-    console.log("You successfully connected to MongoDB!");
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("You successfully connected to MongoDB!");
   } finally {
   }
 }
